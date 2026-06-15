@@ -239,6 +239,20 @@
 
         // 處理 Google 登入邏輯
         document.getElementById('google-login-btn').addEventListener('click', async () => {
+            // 偵測是否為應用程式內建瀏覽器 (LINE, FB, IG 等)
+            const ua = navigator.userAgent || navigator.vendor || window.opera;
+            const isWebView = (ua.indexOf("FBAN") > -1) || 
+                              (ua.indexOf("FBAV") > -1) || 
+                              (ua.indexOf("Instagram") > -1) || 
+                              (ua.indexOf("Line") > -1);
+
+            if (isWebView) {
+                showToast("為確保帳號安全，請點選選單「以預設瀏覽器 (Safari/Chrome) 開啟」後再登入", "error");
+                // 也可以用原生 alert 加強提醒，因為 Toast 可能被忽略
+                alert("Google 安全政策限制：\n請點擊畫面角落的選單，選擇「在 Safari 中開啟」或「在預設瀏覽器中開啟」才能順利登入喔！");
+                return; // 中止後續的 Google 登入呼叫
+            }
+
             try {
                 await signInWithPopup(auth, provider);
             } catch (error) {
