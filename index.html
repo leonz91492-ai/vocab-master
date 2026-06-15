@@ -243,7 +243,14 @@
                 await signInWithPopup(auth, provider);
             } catch (error) {
                 console.error("登入失敗:", error);
-                showToast("登入失敗，請重試", "error");
+                // 針對網域未授權錯誤給予明確提示
+                if (error.code === 'auth/unauthorized-domain') {
+                    showToast("網域未授權！請至 Firebase 後台加入目前網址", "error");
+                } else if (error.code === 'auth/popup-closed-by-user') {
+                    showToast("登入已取消", "info");
+                } else {
+                    showToast("登入失敗，請重試", "error");
+                }
             }
         });
 
