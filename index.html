@@ -240,7 +240,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, deleteDoc, onSnapshot, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, deleteDoc, onSnapshot, collection, addDoc, serverTimestamp, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyBpLVjTLbifHyS-u-dHkn1laGqmUqrlEqE",
@@ -255,6 +255,7 @@
         let app, db, auth;
         let currentUser = null;
         let vocabularies = [];
+        let reviewVocabularies = []; // 新增：用於存放隨機打亂後的複習清單
         let reviewIndex = 0;
         let isFlipped = false;
         
@@ -339,7 +340,10 @@
 
         function updateUI() {
             renderList();
-            updateReviewState();
+            // 當在複習模式下收到資料庫更新時，才同步更新畫面，避免干擾正在複習的進度
+            if (!document.getElementById('tab-review').classList.contains('hidden')) {
+                // 若沒有在複習，則無需強制刷新複習卡片，待切換時處理
+            }
             document.getElementById('word-count').textContent = `共 ${vocabularies.length} 個字`;
         }
 
@@ -355,11 +359,29 @@
             document.getElementById(`tab-${tabName}`).classList.remove('hidden');
 
             if (tabName === 'review') {
-                if (vocabularies.length > 0 && reviewIndex >= vocabularies.length) {
-                    reviewIndex = 0;
+                // 1. 篩選出有被勾選的單字
+                const selectedVocabs = vocabularies.filter(v => v.isSelected);
+                
+                // 2. 如果沒有勾選任何單字，就使用全部的單字；否則使用勾選的單字
+                const sourceList = selectedVocabs.length > 0 ? selectedVocabs : vocabularies;
+
+                // 3. 使用 Fisher-Yates 演算法將陣列隨機打亂 (Shuffle)
+                reviewVocabularies = [...sourceList];
+                for (let i = reviewVocabularies.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [reviewVocabularies[i], reviewVocabularies[j]] = [reviewVocabularies[j], reviewVocabularies[i]];
                 }
+
+                reviewIndex = 0; // 重置複習進度
                 resetCardFlip();
                 updateReviewState();
+                
+                // 給予提示告知目前的複習範圍
+                if (selectedVocabs.length > 0) {
+                    showToast(`重點複習！隨機抽取 ${selectedVocabs.length} 個已勾選單字`, "info");
+                } else if (vocabularies.length > 0) {
+                    showToast(`全面複習！隨機抽取全部 ${vocabularies.length} 個單字`, "info");
+                }
             }
         };
 
@@ -525,6 +547,18 @@
         });
         // ------------------
 
+        // 新增：切換勾選狀態寫入資料庫
+        window.toggleSelect = async function(id, isSelected) {
+            if(!currentUser) return;
+            try {
+                const docRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'vocabulary', id);
+                await updateDoc(docRef, { isSelected: isSelected });
+            } catch (error) {
+                console.error("Error updating select status:", error);
+                showToast("更新狀態失敗", "error");
+            }
+        };
+
         window.deleteWord = async function(id, wordText) {
             if(!currentUser) return;
 
@@ -582,18 +616,26 @@
 
             vocabularies.forEach(vocab => {
                 const card = document.createElement('div');
-                card.className = 'bg-white p-5 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow relative group flex flex-col h-full';
+                card.className = `p-5 rounded-xl border shadow-sm hover:shadow-md transition-all relative group flex flex-col h-full ${vocab.isSelected ? 'bg-indigo-50 border-indigo-300' : 'bg-white border-gray-200'}`;
                 
                 const exampleHTML = vocab.example 
-                    ? `<p class="text-sm text-gray-600 italic mt-3 bg-gray-50 p-2 rounded line-clamp-3">"${escapeHtml(vocab.example)}"</p>` 
+                    ? `<p class="text-sm text-gray-600 italic mt-3 bg-white bg-opacity-60 p-2 rounded line-clamp-3">"${escapeHtml(vocab.example)}"</p>` 
                     : '';
 
+                // 在右上角加入 checkbox 與刪除按鈕
                 card.innerHTML = `
                     <div class="flex justify-between items-start mb-2">
-                        <h3 class="text-xl font-bold text-indigo-700 break-words pr-6">${escapeHtml(vocab.word)}</h3>
-                        <button onclick="deleteWord('${vocab.id}', '${escapeHtml(vocab.word).replace(/'/g, "\\'")}')" class="text-gray-300 hover:text-red-500 transition-colors absolute top-4 right-4">
-                            <i class="fa-solid fa-trash-can"></i>
-                        </button>
+                        <h3 class="text-xl font-bold ${vocab.isSelected ? 'text-indigo-800' : 'text-indigo-700'} break-words pr-12">${escapeHtml(vocab.word)}</h3>
+                        <div class="flex items-center space-x-3 absolute top-4 right-4">
+                            <label class="flex items-center cursor-pointer text-gray-400 hover:text-indigo-600 transition-colors" title="加入重點複習">
+                                <input type="checkbox" class="w-5 h-5 cursor-pointer accent-indigo-600" 
+                                    ${vocab.isSelected ? 'checked' : ''} 
+                                    onchange="toggleSelect('${vocab.id}', this.checked)">
+                            </label>
+                            <button onclick="deleteWord('${vocab.id}', '${escapeHtml(vocab.word).replace(/'/g, "\\'")}')" class="text-gray-300 hover:text-red-500 transition-colors" title="刪除單字">
+                                <i class="fa-solid fa-trash-can"></i>
+                            </button>
+                        </div>
                     </div>
                     <p class="text-base font-medium text-gray-800 break-words">${escapeHtml(vocab.translation)}</p>
                     <div class="mt-auto">
@@ -608,7 +650,7 @@
             const emptyState = document.getElementById('empty-review-state');
             const reviewContainer = document.getElementById('review-container');
 
-            if (vocabularies.length === 0) {
+            if (reviewVocabularies.length === 0) {
                 emptyState.classList.remove('hidden');
                 reviewContainer.classList.add('hidden');
                 return;
@@ -617,12 +659,13 @@
             emptyState.classList.add('hidden');
             reviewContainer.classList.remove('hidden');
 
-            if (reviewIndex >= vocabularies.length) reviewIndex = 0;
-            if (reviewIndex < 0) reviewIndex = vocabularies.length - 1;
+            // 安全防護機制，確保索引不會越界
+            if (reviewIndex >= reviewVocabularies.length) reviewIndex = 0;
+            if (reviewIndex < 0) reviewIndex = reviewVocabularies.length - 1;
 
-            const currentWord = vocabularies[reviewIndex];
+            const currentWord = reviewVocabularies[reviewIndex];
             
-            document.getElementById('review-progress').textContent = `${reviewIndex + 1} / ${vocabularies.length}`;
+            document.getElementById('review-progress').textContent = `${reviewIndex + 1} / ${reviewVocabularies.length}`;
             document.getElementById('review-word').textContent = currentWord.word;
             document.getElementById('review-translation').textContent = currentWord.translation;
             
@@ -657,7 +700,7 @@
             resetCardFlip();
             setTimeout(() => {
                 reviewIndex++;
-                if (reviewIndex >= vocabularies.length) reviewIndex = 0;
+                if (reviewIndex >= reviewVocabularies.length) reviewIndex = 0;
                 updateReviewState();
             }, 150); 
         };
@@ -666,7 +709,7 @@
             resetCardFlip();
             setTimeout(() => {
                 reviewIndex--;
-                if (reviewIndex < 0) reviewIndex = vocabularies.length - 1;
+                if (reviewIndex < 0) reviewIndex = reviewVocabularies.length - 1;
                 updateReviewState();
             }, 150);
         };
