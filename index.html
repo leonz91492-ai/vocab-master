@@ -171,7 +171,13 @@
                     <h2 class="text-2xl font-bold text-gray-800 flex items-center">
                         <i class="fa-solid fa-database text-indigo-500 mr-2"></i> 我的單字庫
                     </h2>
-                    <span id="word-count" class="text-sm font-medium text-gray-500 bg-gray-200 px-3 py-1 rounded-full">共 0 個字</span>
+                    <div class="flex items-center space-x-3">
+                        <!-- 新增：批次刪除按鈕 (預設隱藏) -->
+                        <button id="btn-delete-selected" onclick="deleteSelectedWords()" class="hidden bg-red-100 text-red-600 px-3 py-1 rounded-full text-sm font-medium hover:bg-red-200 transition-colors focus:outline-none focus:ring-2 focus:ring-red-500">
+                            <i class="fa-solid fa-trash-can mr-1"></i> 刪除已選 (<span id="selected-count">0</span>)
+                        </button>
+                        <span id="word-count" class="text-sm font-medium text-gray-500 bg-gray-200 px-3 py-1 rounded-full">共 0 個字</span>
+                    </div>
                 </div>
                 
                 <div id="empty-list-state" class="hidden text-center py-16 bg-white rounded-2xl shadow-sm border border-gray-100">
@@ -204,7 +210,7 @@
                     <!-- 閃卡本體 -->
                     <div class="flip-card w-full max-w-md h-80 cursor-pointer" onclick="toggleFlashcard()">
                         <div id="flashcard-inner" class="flip-card-inner">
-                            <!-- 正面：英文與發音按鈕 (修正：移除 relative) -->
+                            <!-- 正面：英文與發音按鈕 -->
                             <div class="flip-card-front bg-white flex flex-col items-center justify-center p-8 border border-gray-100">
                                 <span class="text-sm text-gray-400 absolute top-4 left-4"><i class="fa-regular fa-hand-pointer"></i> 點擊翻面</span>
                                 <span id="review-progress" class="text-sm text-gray-400 absolute top-4 right-4">1 / 10</span>
@@ -215,7 +221,7 @@
                                     </button>
                                 </div>
                             </div>
-                            <!-- 背面：中文、例句與發音按鈕 (修正：移除 relative) -->
+                            <!-- 背面：中文、例句與發音按鈕 -->
                             <div class="flip-card-back bg-indigo-50 flex flex-col items-center justify-center p-8 border border-indigo-100 relative">
                                 <h4 id="review-translation" class="text-2xl font-semibold text-indigo-800 mb-4 text-center">翻譯</h4>
                                 <div class="w-full h-px bg-indigo-200 mb-4"></div>
@@ -488,7 +494,7 @@
             reader.readAsText(file, 'UTF-8');
         });
 
-        // 狀態更新與刪除
+        // 狀態更新與單筆刪除
         window.toggleSelect = async function(id, isSelected) {
             if(!currentUser) return;
             try {
@@ -526,11 +532,72 @@
             });
         };
 
+        // 新增：批次刪除已選單字
+        window.deleteSelectedWords = async function() {
+            if(!currentUser) return;
+            const selectedVocabs = vocabularies.filter(v => v.isSelected);
+            if (selectedVocabs.length === 0) return;
+
+            const modal = document.createElement('div');
+            modal.className = 'fixed inset-0 bg-black bg-opacity-50 z-[60] flex items-center justify-center p-4';
+            modal.innerHTML = `
+                <div class="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full">
+                    <h3 class="text-lg font-bold text-gray-900 mb-2">確認批次刪除</h3>
+                    <p class="text-gray-600 mb-6">您確定要從資料庫移除這 <span class="font-bold text-red-600">${selectedVocabs.length}</span> 個已勾選的單字嗎？此動作無法復原。</p>
+                    <div class="flex justify-end space-x-3">
+                        <button id="cancel-batch-del" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg">取消</button>
+                        <button id="confirm-batch-del" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">確認刪除</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(modal);
+
+            return new Promise((resolve) => {
+                document.getElementById('cancel-batch-del').onclick = () => { modal.remove(); resolve(false); };
+                document.getElementById('confirm-batch-del').onclick = async () => {
+                    modal.remove();
+                    const btn = document.getElementById('btn-delete-selected');
+                    const originalHTML = btn.innerHTML;
+                    
+                    try {
+                        btn.disabled = true;
+                        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> 刪除中...';
+
+                        // 使用 Promise.all 同時發送多個刪除請求，提升效能
+                        const deletePromises = selectedVocabs.map(vocab => 
+                            deleteDoc(doc(db, 'artifacts', appId, 'users', currentUser.uid, 'vocabulary', vocab.id))
+                        );
+                        await Promise.all(deletePromises);
+                        
+                        showToast(`已成功刪除 ${selectedVocabs.length} 個單字`, "success");
+                    } catch (error) { 
+                        console.error(error);
+                        showToast("批次刪除失敗", "error"); 
+                    } finally {
+                        btn.disabled = false;
+                        btn.innerHTML = originalHTML;
+                    }
+                    resolve(true);
+                };
+            });
+        };
+
         // 列表與複習介面渲染
         function renderList() {
             const grid = document.getElementById('word-grid');
             const emptyState = document.getElementById('empty-list-state');
+            const btnDeleteSelected = document.getElementById('btn-delete-selected');
+            const selectedCountSpan = document.getElementById('selected-count');
+            
             grid.innerHTML = '';
+
+            // 計算已勾選數量並動態顯示/隱藏「批次刪除」按鈕
+            const selectedCount = vocabularies.filter(v => v.isSelected).length;
+            if (selectedCount > 0) {
+                btnDeleteSelected.classList.remove('hidden');
+                selectedCountSpan.textContent = selectedCount;
+            } else {
+                btnDeleteSelected.classList.add('hidden');
+            }
 
             if (vocabularies.length === 0) {
                 grid.classList.add('hidden'); emptyState.classList.remove('hidden'); return;
@@ -546,7 +613,7 @@
                     <div class="flex justify-between items-start mb-2">
                         <h3 class="text-xl font-bold ${vocab.isSelected ? 'text-indigo-800' : 'text-indigo-700'} break-words pr-12">${escapeHtml(vocab.word)}</h3>
                         <div class="flex items-center space-x-3 absolute top-4 right-4">
-                            <label class="flex items-center cursor-pointer text-gray-400 hover:text-indigo-600" title="加入重點複習">
+                            <label class="flex items-center cursor-pointer text-gray-400 hover:text-indigo-600" title="選取單字">
                                 <input type="checkbox" class="w-5 h-5 cursor-pointer accent-indigo-600" ${vocab.isSelected ? 'checked' : ''} onchange="toggleSelect('${vocab.id}', this.checked)">
                             </label>
                             <button onclick="deleteWord('${vocab.id}', '${escapeHtml(vocab.word).replace(/'/g, "\\'")}')" class="text-gray-300 hover:text-red-500" title="刪除單字">
